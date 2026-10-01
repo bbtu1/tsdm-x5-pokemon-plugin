@@ -241,6 +241,31 @@ def test_passive_pokemon_replacement():
         ok("passive replacement regression")
 
 
+def test_capture_persists_shiny():
+    print("\n=== Capture persists shiny flag ===")
+    battle_php = PLUGIN_DIR / "api" / "battle.php"
+    if not battle_php.exists():
+        fail("battle.php not found", str(battle_php))
+        return
+
+    text = battle_php.read_text(encoding="utf-8", errors="replace")
+    # api_capture_pokemon 里写 pm_mypm 的 INSERT，其列清单必须包含 is_shiny：
+    # 否则野外遇到的闪光抓回来后会被写成列默认值 0（普通），闪光永久丢失。
+    m = re.search(
+        r"pm_table\('pm_mypm'\)\s*\.\s*\"\s*\(\s*([^)]*)\)\s*VALUES",
+        text,
+        re.IGNORECASE,
+    )
+    if not m:
+        fail("capture INSERT into pm_mypm not found", "battle.php")
+        return
+
+    if re.search(r"\bis_shiny\b", m.group(1)):
+        ok("capture INSERT persists is_shiny")
+    else:
+        fail("capture INSERT missing is_shiny", "captured shiny would be saved as normal")
+
+
 def test_migration_coverage():
     print("\n=== Migration script coverage ===")
     if not MIGRATION_SQL.exists():
@@ -390,6 +415,7 @@ def main():
     test_passive_pokemon_replacement()
     test_active_pokemon_switch()
     test_party_pokemon_moves()
+    test_capture_persists_shiny()
     test_migration_coverage()
     test_learned_skill_authorization()
     test_php_syntax()

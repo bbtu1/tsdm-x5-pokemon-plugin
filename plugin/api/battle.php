@@ -1255,11 +1255,25 @@ function clear_battle_state($uid)
 }
 
 /**
+ * 记录一场战斗失利：总场次 +1、败场 +1。
+ *
+ * 胜利的记账在 apply_rewards() 里（dataall/datawin +1）；成功逃跑不计入
+ * 胜负（pm_mypm 的 hp 归零但战场结束才算失败）。此前败场从未被写入，
+ * 导致个人资料里的「败场」永远是 0、总场次也偏少。
+ */
+function record_battle_loss($uid)
+{
+    DB::query(pm_sql("UPDATE " . pm_table('pm_usersdata') . "
+        SET dataall = dataall + 1, datalost = datalost + 1
+        WHERE uid = %d", intval($uid)));
+}
+
+/**
  * 我方宠物倒下时的统一判定。
  *
  * 还有可用替补（site<3 且 hp>0 且 state!=0，排除当前宠物）时战斗继续：
  * 保留 pm_usersdata 里的战斗状态，交给换宠/替换接口接管；
- * 没有任何可用替补才真正结束（清空战斗状态）。
+ * 没有任何可用替补才真正结束（清空战斗状态并记一场败场）。
  *
  * 返回 [battle_over, can_continue_switch]：
  * - battle_over：战斗是否已在服务端结束；
@@ -1279,6 +1293,7 @@ function handle_my_pokemon_fainted($uid, $current_pet_id)
     }
 
     clear_battle_state($uid);
+    record_battle_loss($uid);
     return [true, false];
 }
 
@@ -1885,15 +1900,25 @@ function api_capture_pokemon()
         $spdefg = rand(0, 31);
         $sdg = rand(0, 31);
 
-        // 随机性别
-        $sexrand = rand(1, 1000);
-        if ($sexrand <= $npc['sex']) {
-            $sex = 1;
-        } elseif ($npc['sex'] < 0) {
+        // 闪光与性别在开战时已编码进 pm_usersdata.allure（(gender<<1)|shiny），
+        // 捕捉必须沿用战斗里展示的那一份：否则抓到的闪光会变成普通，
+        // 性别也会和战斗画面不一致。
+        $stored_attr = (isset($myusersdata['allure']) && $myusersdata['allure'] !== '')
+            ? intval($myusersdata['allure']) : null;
+        $captured_shiny = ($stored_attr !== null) && (($stored_attr & 1) === 1);
+        $captured_gender = ($stored_attr !== null) ? (($stored_attr >> 1) & 1) : null; // 0=雄性 1=雌性
+
+        // 映射到 pm_mypm.sex：1=雄 2=雌 0=无性别（与战斗展示保持一致）
+        if ((int) $npc['sex'] < 0) {
             $sex = 0;
+        } elseif ($captured_gender !== null) {
+            $sex = ($captured_gender === 0) ? 1 : 2;
         } else {
-            $sex = 2;
+            // 旧战斗状态没有 allure 时的兜底：沿用原有随机逻辑
+            $sexrand = rand(1, 1000);
+            $sex = ($sexrand <= $npc['sex']) ? 1 : 2;
         }
+        $is_shiny = $captured_shiny ? 1 : 0;
 
         // 检查是否有首位宠物
         $has_first = DB::result_first(pm_sql(
@@ -1922,15 +1947,15 @@ function api_capture_pokemon()
         DB::query(pm_sql("INSERT INTO " . pm_table('pm_mypm') . "
             (uid, pmname, nickname, species_id, level, exp, sex, sx, hp,
              hpg, atkg, defg, spatkg, spdefg, sdg,
-             good, itemevolve, ballid, site, state, statetime, gduptime, initialuid)
+             good, itemevolve, ballid, site, state, is_shiny, statetime, gduptime, initialuid)
             VALUES (
                 %d, %s, %s, %d, %d, %d, %d, %s,
                 %d, %d, %d, %d, %d, %d, %d,
-                70, 0, %d, %d, 1, %d, %d, %d
+                70, 0, %d, %d, 1, %d, %d, %d, %d
             )",
             $_G['uid'], $npc['name'], $npc['name'], $npc['id'], $npc_level, $initial_exp, $sex, $npc['xs'],
             $npc_hp, $hpg, $atkg, $defg, $spatkg, $spdefg, $sdg,
-            $my_ball['ballid'], $site, time(), time(), $_G['uid']
+            $my_ball['ballid'], $site, $is_shiny, time(), time(), $_G['uid']
         ));
 
         clear_battle_state($_G['uid']);
@@ -2607,6 +2632,7 @@ SET site = 1 WHERE id = %d AND uid = %d AND site < 3 AND hp > 0 AND state != 0",
                     $final_npc_level = $myusersdata['level'];
 
                     clear_battle_state($_G['uid']);
+                    record_battle_loss($_G['uid']);
 
                     // 重新获取新宠物数据构建响应
                     $new_mypokemon = api_my_pokemon($_G['username']);

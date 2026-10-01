@@ -96,6 +96,15 @@ function clear_battle_state($uid)
     ]);
 }
 
+function record_battle_loss($uid)
+{
+    // api_switch_pokemon 在无替补的战斗失败时调用；这里只记录被调用次数
+    if (!isset($GLOBALS['calls']['loss'])) {
+        $GLOBALS['calls']['loss'] = 0;
+    }
+    $GLOBALS['calls']['loss']++;
+}
+
 class DB
 {
     public static $pets;
