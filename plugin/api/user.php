@@ -183,6 +183,9 @@ function api_get_inventory()
 {
     require_login();
 
+    // 旧库可能缺 module 列，先自愈再显式 SELECT i.module（同 battle.php）
+    api_ensure_itemdata_module_column();
+
     global $_G;
     $uid = validate_uid($_G['uid']);
 
